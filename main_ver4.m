@@ -1,17 +1,32 @@
 clc
 clear
 % file_path='D:\part_time_job\DWI\IVIM1\IVIM1\IM';
-file_path='D:\part_time_job\DWI\IVIM1\PENG_XIAOYAN\IM';
+file_path='D:\part_time_job\DWI\IVIM1\fangjun\IM';
 solve_method=1; %1=Biexp, 2=LS,3=Mix,4= fix D_star?5=sove 3 variable simultaneously
-d_method=1; % 1=use ADC as d,2=use LS method fitting
+d_method=2; % 1=use ADC as d,2=use LS method fitting,3=use just two points to calculate
 data_source='DICOM'; % DICOM or nii;
-opti_method='trust-region-reflective'; % trust-region-reflective method or levenberg-marquardt method
-ROI_create=0;% 1: create the ROI,0= load the ROI;
+ROI_create=1;% 1: create the ROI,0= load the ROI;
+use_modify_model=0; % 1=using the modified model; 0=use the origiianal model
+result_quantizer=0; % 1=quantizing the result;
+opti_method='levenberg-marquardt'; % trust-region-reflective method or levenberg-marquardt method
 options.Algorithm = opti_method;
+use_filter=1; % 1=use filter; 0=don't use filter;
+threshold_noise=15; % threshold for noise; signal value below this value is thougt to be noise
 
+num_image=252; %number of images
+num_slice=18; % number of slice
+num_analysis=9; % slice number used for analysis
+
+
+D_star_ub=50*10^(-3);
+D_star_lb=0;
+D_ub=2.5*10^(-3);
+D_lb=0;
+f_ub=0.3;
+f_lb=0;
 %% this section choose the DICOM image
 if(strcmp(data_source,'DICOM'))
-    for(i=1:238)
+    for(i=1:num_image-1)
         file_seq=i-1;
         file_seq_str=num2str(file_seq);
         file_path_full=strcat(file_path,file_seq_str);
@@ -21,9 +36,11 @@ if(strcmp(data_source,'DICOM'))
     [z_axis_new,index_i]=sort(z_axis_total);
     clear z_axis_new z_axis_total metadata file_path_full file_seq_str file_seq
     
-    for(i=1:14)
+    num_b=floor(num_image/num_slice);
+    
+    for(i=1:num_b)
         %     file_seq=(i-1)*17+8;
-        file_seq=index_i(9*14+i)-1;
+        file_seq=index_i(num_analysis*num_b+i)-1;
         file_seq_str=num2str(file_seq);
         file_path_full=strcat(file_path,file_seq_str);
         
@@ -65,7 +82,6 @@ end
 % for(i=1:14)
 %     I(:,:,i)=imfilter(I(:,:,i),h);
 % end
-
 % I=I(40:244,45:212,:);
 h_handle=figure
 imagesc(I(:,:,1));
@@ -76,6 +92,8 @@ if(ROI_create)
     BW = roipoly(I(:,:,1));
     ROI_file=strcat('BW_',metadata.PatientName.FamilyName);
     save(ROI_file,'BW');
+    
+%     BW1 = edge(I(:,:,1),'sobel'); % edge detection
 else
     BW=load(strcat('BW_',metadata.PatientName.FamilyName));
     BW=BW.BW;
@@ -96,8 +114,8 @@ Error_model_matrix=zeros(m_row,n_col);
 
 
 
-num_start=9;
-num_end=13;
+num_start=9; % the 9th b number 
+num_end=13; % the 13th b number
 n_length=num_end-num_start+1;
 b_val_nonzero=b_val(1:end-1);
 
@@ -129,19 +147,27 @@ for(i=1:m_row)
             end
             
             switch solve_method
-                case 1
-                    if(abs(min([Sb,S0]))<5)
+                case 1 % use biexponential method
+                    if(abs(min([Sb,S0]))<threshold_noise)
                         f_matrix(i,j)=0;
                     else
                         switch d_method
                             case 1
                                 D=-log(Sb_comp(end)/S0)/b_comp(end);
                             case 2
-                                y_temp=log(Sb_comp/S0)';
+                                y_temp=log(Sb_comp/S0)';                                
                                 A_temp=-b_comp';
                                 D=pinv(A_temp)*y_temp;
+                            case 3
+                                D=-(log(Sb_comp(1)/Sb_comp(end)))/(b_comp(1)-b_comp(end)); % two points method to calculate D value
                             otherwise
                                 disp('under construction!');
+                        end
+                        if(D_matrix(i,j)<D_lb)
+                            D_matrix(i,j)=0;
+                        end
+                        if(D_matrix(i,j)>D_ub)
+                            D_matrix(i,j)=D_ub;
                         end
                         
                         if(D<0)
@@ -149,11 +175,15 @@ for(i=1:m_row)
                             Error_D_matrix(i,j)=1;
                         end
                         D_matrix(i,j)=D;
-                        if(D==0)
-                            %                         f_matrix(i,j)=1-Sb_comp(end)/S0;
+                        if(D==0)                           
                             f_matrix(i,j)=0;
                         else
-                            fun = @(x)(x(1).*exp(-x(2).*b_val)+(1-x(1)).*exp(-D.*b_val))-Sb_normalize;
+                            if(use_modify_model)
+                                fun = @(x)(x(1).*exp(-(x(2)+D).*b_val)+(1-x(1)).*exp(-D.*b_val))-Sb_normalize;
+                            else
+                                fun = @(x)(x(1).*exp(-x(2).*b_val)+(1-x(1)).*exp(-D.*b_val))-Sb_normalize;
+                            end
+                            
                             x0 = [0.0025,25*D];
                             lb=[0,1.5*D];
                             ub=[0.3,0.3];
@@ -167,8 +197,8 @@ for(i=1:m_row)
                             D_star_matrix(i,j)=x(2);
                         end
                     end
-                case 2
-                    if(abs(min([Sb,S0]))<1)
+                case 2 % use simpified method
+                    if(abs(min([Sb,S0]))<threshold_noise)
                         f_matrix(i,j)=0;
                         D_matrix(i,j)=0;
                     else
@@ -179,46 +209,65 @@ for(i=1:m_row)
                         D_matrix(i,j)=temp(1);
                         f_matrix(i,j)=1-exp(temp(2));
                     end
-                case 3
-                    if(abs(min([Sb,S0]))<5)
+                case 3 % use the LS method as the initial point
+                    if(abs(min([Sb,S0]))<threshold_noise)
                         f_matrix(i,j)=0;
                         D_matrix(i,j)=0;
                     else
-                        D=-log(Sb_comp(end)/S0)/b_comp(end);
-                        D_matrix(i,j)=D;
-                        if(D==0)
-                            f_matrix(i,j)=1-Sb_comp(end)/S0;
-                        else
-                            Sb_normalize_comp_log=log(Sb_normalize_comp);
-                            coef=[-b_comp',ones(num_end-num_start+1,1)];
-                            temp=pinv(coef)*Sb_normalize_comp_log';
-                            D_matrix(i,j)=temp(1);
-                            f_matrix(i,j)=1-exp(temp(2));
-                            
-                            lb=[0,1.5*D];
-                            ub=[0.25,0.3];
-                            fun = @(x)(x(1).*exp(-x(2).*b_val)+(1-x(1)).*exp(-D.*b_val))-Sb_normalize;
-                            x0 = [15*D_matrix(i,j),f_matrix(i,j)];
-                            
-                            if(strcmp(opti_method,'trust-region-reflective'))
-                                [x,resnorm,residual,exitflag,output,lambda,jacobian] = lsqnonlin(fun,x0,lb,ub,options);
-                            else
-                                [x,resnorm,residual,exitflag,output,lambda,jacobian] = lsqnonlin(fun,x0,[],[],options);
-                            end
-                            f_matrix(i,j)=x(1);
-                            D_star_matrix(i,j)=x(2);
+                        Sb_normalize_comp_log=log(Sb_normalize_comp);
+                        coef=[-b_comp',ones(num_end-num_start+1,1)];
+                        temp=pinv(coef)*Sb_normalize_comp_log';
+                        D_matrix(i,j)=temp(1);
+                        f_matrix_LS(i,j)=1-exp(temp(2));
+                        
+                        if(f_matrix_LS(i,j)<f_lb)
+                            f_matrix_LS(i,j)=0;
                         end
+                        if(f_matrix_LS(i,j)>f_ub)
+                            f_matrix_LS(i,j)=0;
+                        end
+                        
+                        if(D_matrix(i,j)<D_lb)
+                            D_matrix(i,j)=0;
+                        end
+                        if(D_matrix(i,j)>D_ub)
+                            D_matrix(i,j)=0;
+                        end
+                        
+                        D=D_matrix(i,j);
+                        lb=[f_lb,1.5*D_matrix(i,j)];
+                        ub=[f_ub,D_star_ub];
+                        if(use_modify_model)
+                            fun = @(x)(x(1).*exp(-(x(2)+D).*b_val)+(1-x(1)).*exp(-D.*b_val))-Sb_normalize;
+                        else
+                            fun = @(x)(x(1).*exp(-x(2).*b_val)+(1-x(1)).*exp(-D.*b_val))-Sb_normalize;
+                        end
+                        
+                        
+                        x0 = [15*D_matrix(i,j),f_matrix_LS(i,j)];
+                        if(strcmp(opti_method,'trust-region-reflective'))
+                            [x,resnorm,residual,exitflag,output,lambda,jacobian] = lsqnonlin(fun,x0,lb,ub,options);
+                        else
+                            [x,resnorm,residual,exitflag,output,lambda,jacobian] = lsqnonlin(fun,x0,[],[],options);
+                        end
+                        f_matrix(i,j)=x(1);
+                        D_star_matrix(i,j)=x(2);                   
                     end
-                case 4
-                    if(abs(min(Sb))<5)
+                case 4 % fix the D* 
+                    if(abs(min(Sb))<threshold_noise)
                         f_matrix(i,j)=0;
                     else
-                        D_star_value=0.02;
+                        D_star_value=0.03;
                         D_star_matrix(i,j)=D_star_value;
-                        fun = @(x)(x(1).*exp(-D_star_value.*b_val)+(1-x(1)).*exp(-x(2).*b_val))-Sb_normalize;
+                        if(use_modify_model)
+                                fun = @(x)(x(1).*exp(-(D_star_value+x(2)).*b_val)+(1-x(1)).*exp(-x(2).*b_val))-Sb_normalize;
+                            else
+                                fun = @(x)(x(1).*exp(-D_star_value.*b_val)+(1-x(1)).*exp(-x(2).*b_val))-Sb_normalize;
+                        end
+                        
                         x0 = [0.0025,D_star_value/25];
                         lb=[0,0];
-                        ub=[0.05,D_star_value/1.5];
+                        ub=[0.3,D_star_value/1.5];
                         if(strcmp(opti_method,'trust-region-reflective'))
                             [x,resnorm,residual,exitflag,output,lambda,jacobian] = lsqnonlin(fun,x0,lb,ub,options);
                         else
@@ -228,14 +277,14 @@ for(i=1:m_row)
                         f_matrix(i,j)=x(1);
                         D_matrix(i,j)=x(2);
                     end
-                case 5
-                    if(abs(min([Sb,S0]))<5)
+                case 5 % solve the three parameters simultanoeusly
+                    if(abs(min([Sb,S0]))<threshold_noise)
                         f_matrix(i,j)=0;
                     else
                         fun = @(x)(x(1).*exp(-x(2).*b_val)+(1-x(1)).*exp(-x(3).*b_val))-Sb_normalize;
                         x0 = [0.0025,0.005,0.005];
                         lb=[0,0,0];
-                        ub=[0.05,0.3,0.05];
+                        ub=[0.3,0.3,0.05];
                         if(strcmp(opti_method,'trust-region-reflective'))
                             [x,resnorm,residual,exitflag,output,lambda,jacobian] = lsqnonlin(fun,x0,lb,ub,options);
                         else
@@ -245,98 +294,119 @@ for(i=1:m_row)
                         f_matrix(i,j)=x(1);
                         D_star_matrix(i,j)=x(2);
                         D_matrix(i,j)=x(3);
-                    end
+                    end                
                 otherwise
-                    warning('Unexpected plot type. No plot created.')
+                    warning('under construction!')
             end
         end
     end
 end
 
-
+h = fspecial('gaussian',[3,3],0.2);
 %% post-processing %%
-ffigure_matrix=f_matrix;
-figure
-index_f=find(f_matrix>0.3);
-ffigure_matrix(index_f)=0.0;
-index_f=find(f_matrix<0);
-ffigure_matrix(index_f)=0.0;
-imagesc(ffigure_matrix);
-colorbar
-title(strcat('f map/ ',metadata.PatientName.FamilyName))
+if(result_quantizer)
+    ffigure_matrix=f_matrix;
+    figure
+    index_f=find(f_matrix>f_ub);
+    ffigure_matrix(index_f)=0.0;
+    index_f=find(f_matrix<f_lb);
+    ffigure_matrix(index_f)=0.0;
+    k_f=1/f_ub;
+    ffigure_matrix=k_f*ffigure_matrix;
+    ffigure_matrix=fi(ffigure_matrix,0,4);
+    ffigure_matrix=str2num(ffigure_matrix.Value);    
+    ffigure_matrix=imfilter(ffigure_matrix,h);    
+    imagesc(ffigure_matrix);
+    colorbar
+    title(strcat('f map/ ',metadata.PatientName.FamilyName))
+    
+    
+    Dfigure_matrix=D_matrix;
+    figure
+    index_D=find(D_matrix>D_ub);
+    Dfigure_matrix(index_D)=0.0;
+    index_D=find(D_matrix<D_lb);
+    Dfigure_matrix(index_D)=0.0;
+    k_d=1/D_ub;
+    Dfigure_matrix=k_d*Dfigure_matrix;
+    Dfigure_matrix=fi(Dfigure_matrix,0,4);
+    Dfigure_matrix=str2num(Dfigure_matrix.Value);    
+    Dfigure_matrix=imfilter(Dfigure_matrix,h);
+    imagesc(Dfigure_matrix);
+    colorbar
+    title(strcat('D map/',metadata.PatientName.FamilyName))
+    
+    D_star_figure_matrix=D_star_matrix;
+    figure
+    index_D=find(D_star_figure_matrix>D_star_ub);
+    D_star_figure_matrix(index_D)=0.0;
+    index_D=find(D_star_figure_matrix<D_star_lb);
+    D_star_figure_matrix(index_D)=0.0;
+    k_d=1/D_star_ub;
+    D_star_figure_matrix=k_d*D_star_figure_matrix;
+    D_star_figure_matrix=fi(D_star_figure_matrix,0,4);
+    D_star_figure_matrix=str2num(D_star_figure_matrix.Value);
+    imagesc(D_star_figure_matrix);
+    colorbar
+    title(strcat('D star map/',metadata.PatientName.FamilyName))
+else
+    ffigure_matrix=f_matrix;
+    figure  
+    index_f=find(f_matrix>f_ub);
+    ffigure_matrix(index_f)=0.0;
+    index_f=find(f_matrix<f_lb);
+    ffigure_matrix(index_f)=0.0;
+    if(use_filter)
+        ffigure_matrix=imfilter(ffigure_matrix,h); 
+    end     
+    imagesc(ffigure_matrix);
+    colorbar
+    title(strcat('f map/ ',metadata.PatientName.FamilyName))
+    clear index_f
+    
+    
+    Dfigure_matrix=D_matrix;
+    figure
+    index_D=find(D_matrix>D_ub);
+    Dfigure_matrix(index_D)=D_ub;
+    index_D=find(D_matrix<D_lb);
+    Dfigure_matrix(index_D)=D_lb;
+    if(use_filter)
+        Dfigure_matrix=imfilter(Dfigure_matrix,h); 
+    end
+    imagesc(Dfigure_matrix);
+    colorbar
+    title(strcat('D map/',metadata.PatientName.FamilyName))
+    clear index_D
+    
+    
+    
+    D_star_figure_matrix=D_star_matrix;
+    figure    
+    index_D=find(D_star_figure_matrix>D_star_ub);
+    D_star_figure_matrix(index_D)=0.0;
+    index_D=find(D_star_figure_matrix<D_star_lb);
+    D_star_figure_matrix(index_D)=0.0;
+    imagesc(D_star_figure_matrix);
+    colorbar
+    title(strcat('D star map/',metadata.PatientName.FamilyName))
+    clear index_D
+    
+    D_f_matrix=f_matrix.*D_star_matrix;
+    figure
+    index_D=find(D_f_matrix>0.005);
+    D_f_matrix(index_D)=0.0;
+    index_D=find(D_f_matrix<0);
+    D_f_matrix(index_D)=0.0;
+    imagesc(D_f_matrix);
+    colorbar
+    title(strcat('D star X f star map/',metadata.PatientName.FamilyName))    
+end
 
 
-Dfigure_matrix=D_matrix;
-figure
-index_D=find(D_matrix>0.005);
-Dfigure_matrix(index_D)=0.0;
-index_D=find(D_matrix<0);
-Dfigure_matrix(index_D)=0.0;
-imagesc(Dfigure_matrix);
-colorbar
-title(strcat('D map/',metadata.PatientName.FamilyName))
 
 
 
 
 
 
-% figure
-% K_f=4000/max(max(f_matrix));
-% F_matrix=uint16(K_f*f_matrix);
-% imagesc(F_matrix);
-% colorbar
-% title('f map')
-% 
-% figure
-% F1_matrix=K_f*f_matrix;
-% index=find(F1_matrix>3500);
-% F1_matrix(index)=0;
-% F1_matrix=uint16(F1_matrix);
-% imagesc(F1_matrix);
-% colorbar
-% title('f post-processing map')
-% 
-% figure
-% index_f=find(f_matrix>0.4);
-% f_matrix(index_f)=0.0;
-% index_f=find(f_matrix<0);
-% f_matrix(index_f)=0.0;
-% 
-% K_f=65535/max(max(f_matrix));
-% F_matrix=uint16(K_f*f_matrix);
-% imagesc(F_matrix);
-% colorbar
-% title('f post-processing map2')
-% 
-% figure
-% K_D=4000/max(max(D_matrix));
-% D_matrix_bold=uint16(K_D*D_matrix);
-% imagesc(D_matrix_bold);
-% colorbar
-% title('D map')
-
-
-% figure
-% K_D_star=4000/max(max(D_star_matrix));
-% D_matrix_star_bold=uint16(K_D_star*D_star_matrix);
-% imagesc(D_matrix_star_bold);
-% colorbar
-% 
-% 
-% 
-% 
-% I1=dicomread('D:\part_time_job\DWI\IVIM1\IVIM1\IM0');  
-% metadata1 = dicominfo('D:\part_time_job\DWI\IVIM1\IVIM1\IM0');
-% imagesc(I1);
-% colorbar
-% 
-% I2=dicomread('D:\part_time_job\DWI\IVIM1\IVIM1\IM17');  
-% metadata2 = dicominfo('D:\part_time_job\DWI\IVIM1\IVIM1\IM17');
-% figure
-% imagesc(I2);
-% 
-% metadata1.SliceLocation
-% metadata2.SliceLocation
-% z_location=[];
-% z_location=metadata1.SliceLocation;
