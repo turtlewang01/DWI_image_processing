@@ -3,9 +3,9 @@ clear
 % file_path='D:\part_time_job\DWI\IVIM1\IVIM1\IM';
 file_path='D:\part_time_job\DWI\IVIM1\fangjun\IM';
 solve_method=1; %1=Biexp, 2=LS,3=Mix,4= fix D_star?5=sove 3 variable simultaneously
-d_method=2; % 1=use ADC as d,2=use LS method fitting,3=use just two points to calculate
+d_method=2; % 1=use ADC as d,2=use LS method fitting,3=use just two points to calculate D,4= use the LS method fitting,but use the original data
 data_source='DICOM'; % DICOM or nii;
-ROI_create=1;% 1: create the ROI,0= load the ROI;
+ROI_create=0;% 1: create the ROI,0= load the ROI;
 use_modify_model=0; % 1=using the modified model; 0=use the origiianal model
 result_quantizer=0; % 1=quantizing the result;
 opti_method='levenberg-marquardt'; % trust-region-reflective method or levenberg-marquardt method
@@ -128,7 +128,7 @@ for(i=1:m_row)
             for(kk=1:14)
                 Sb(kk)=I(i,j,kk);
             end
-            Sb_nonzero=Sb(1:13);
+            Sb_nonzero=Sb(1:num_b-1);
             
             if(max(Sb_nonzero)>S0)
                 Error_model_matrix(i,j)=1;
@@ -138,7 +138,7 @@ for(i=1:m_row)
             if(abs(S0)>0.3)
                 Sb_normalize=Sb/S0;
             else
-                Sb_normalize=zeros(1,14);
+                Sb_normalize=zeros(1,num_b);
             end
             b_comp=b_val(num_start:num_end);
             Sb_normalize_comp=Sb_normalize(num_start:num_end);
@@ -156,10 +156,18 @@ for(i=1:m_row)
                                 D=-log(Sb_comp(end)/S0)/b_comp(end);
                             case 2
                                 y_temp=log(Sb_comp/S0)';                                
-                                A_temp=-b_comp';
-                                D=pinv(A_temp)*y_temp;
+                                A_temp=[-b_comp',ones(length(y_temp),1)];
+                                temp=pinv(A_temp)*y_temp;
+                                D=temp(1);
+                                clear temp
                             case 3
                                 D=-(log(Sb_comp(1)/Sb_comp(end)))/(b_comp(1)-b_comp(end)); % two points method to calculate D value
+                            case 4 %there is some bugs with this case
+                                y_temp=log(Sb_comp)';
+                                A_temp=[-b_comp',ones(length(y_temp),1)];
+                                temp=pinv(A_temp)*y_temp;
+                                D=temp(1);
+                                clear temp
                             otherwise
                                 disp('under construction!');
                         end
