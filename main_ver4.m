@@ -124,8 +124,8 @@ b_val_nonzero=b_val(1:end-1);
 for(i=1:m_row)
     for(j=1:n_col)
         if(BW(i,j)==1)
-            S0=I(i,j,14);
-            for(kk=1:14)
+            S0=I(i,j,num_b);
+            for(kk=1:num_b)
                 Sb(kk)=I(i,j,kk);
             end
             Sb_nonzero=Sb(1:num_b-1);
