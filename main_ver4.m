@@ -1,7 +1,7 @@
 clc
 clear
 % file_path='D:\part_time_job\DWI\IVIM1\IVIM1\IM';
-file_path='D:\part_time_job\DWI\IVIM1\fangjun\IM';
+file_path='D:\part_time_job\DWI\IVIM1\panxingjian\IM';
 solve_method=1; %1=Biexp, 2=LS,3=Mix,4= fix D_star?5=sove 3 variable simultaneously
 d_method=2; % 1=use ADC as d,2=use LS method fitting,3=use just two points to calculate D,4= use the LS method fitting,but use the original data
 data_source='DICOM'; % DICOM or nii;
@@ -13,8 +13,8 @@ options.Algorithm = opti_method;
 use_filter=1; % 1=use filter; 0=don't use filter;
 threshold_noise=15; % threshold for noise; signal value below this value is thougt to be noise
 
-num_image=252; %number of images
-num_slice=18; % number of slice
+num_image=238; %number of images
+num_slice=17; % number of slice
 num_analysis=9; % slice number used for analysis
 
 
@@ -24,6 +24,8 @@ D_ub=2.5*10^(-3);
 D_lb=0;
 f_ub=0.3;
 f_lb=0;
+
+num_b=floor(num_image/num_slice);
 %% this section choose the DICOM image
 if(strcmp(data_source,'DICOM'))
     for(i=1:num_image-1)
@@ -36,7 +38,7 @@ if(strcmp(data_source,'DICOM'))
     [z_axis_new,index_i]=sort(z_axis_total);
     clear z_axis_new z_axis_total metadata file_path_full file_seq_str file_seq
     
-    num_b=floor(num_image/num_slice);
+    
     
     for(i=1:num_b)
         %     file_seq=(i-1)*17+8;
@@ -69,8 +71,8 @@ else
     file_path='D:\part_time_job\DWI\IVIM1\pengxiaoyan_nii\pengxiaoyan.nii';
     nii = load_nii(file_path);
     D=nii.img;    
-    for(i=1:14)
-        I(:,:,i)=D(:,:,8,i);
+    for(i=1:num_b)
+        I(:,:,i)=D(:,:,num_analysis,i);
     end   
     clear D nii;
     I= rot90(I);
