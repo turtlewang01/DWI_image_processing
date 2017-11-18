@@ -2,7 +2,7 @@ clc
 clear
 % file_path='D:\part_time_job\DWI\IVIM1\IVIM1\IM';
 file_path='D:\part_time_job\DWI\IVIM1\panxingjian\IM';
-solve_method=1; %1=Biexp, 2=LS,3=Mix,4= fix D_star?5=sove 3 variable simultaneously
+solve_method=2; %1=Biexp, 2=LS,3=Mix,4= fix D_star?5=sove 3 variable simultaneously
 d_method=2; % 1=use ADC as d,2=use LS method fitting,3=use just two points to calculate D,4= use the LS method fitting,but use the original data
 data_source='DICOM'; % DICOM or nii;
 ROI_create=0;% 1: create the ROI,0= load the ROI;
@@ -13,10 +13,13 @@ options.Algorithm = opti_method;
 use_filter=1; % 1=use filter; 0=don't use filter;
 threshold_noise=15; % threshold for noise; signal value below this value is thougt to be noise
 
-num_image=238; %number of images
-num_slice=17; % number of slice
 num_analysis=9; % slice number used for analysis
+num_image=238; %number of images?this option only takes effect when choose nii format
+num_slice=17; % number of slice?this option only takes effect when choose nii format
 
+
+flag_use_part_b=1; %1=use part of the b value for computation;0=use all the b value to compute;
+b_value_list=[200,400,800,1000]; % use part b-value for computation, b=0 is used by default.
 
 D_star_ub=50*10^(-3);
 D_star_lb=0;
@@ -36,12 +39,8 @@ if(strcmp(data_source,'DICOM'))
         z_axis_total(i)=metadata.SliceLocation;
     end    
     [z_axis_new,index_i]=sort(z_axis_total);
-    clear z_axis_new z_axis_total metadata file_path_full file_seq_str file_seq
-    
-    
-    
-    for(i=1:num_b)
-        %     file_seq=(i-1)*17+8;
+    clear z_axis_new z_axis_total metadata file_path_full file_seq_str file_seq        
+    for(i=1:num_b)        
         file_seq=index_i(num_analysis*num_b+i)-1;
         file_seq_str=num2str(file_seq);
         file_path_full=strcat(file_path,file_seq_str);
@@ -68,23 +67,27 @@ if(strcmp(data_source,'DICOM'))
     I=temp;
 else
     %% this section use the nii denoise image
-    file_path='D:\part_time_job\DWI\IVIM1\pengxiaoyan_nii\pengxiaoyan.nii';
+    file_path='D:\part_time_job\DWI\IVIM1\guiqing_nii\guiqing.nii';
+    metadata.PatientName.FamilyName='guiqing';
     nii = load_nii(file_path);
-    D=nii.img;    
+    D=nii.img;
+    [~,~,num_slice,num_b]=size(D);
+    num_image=num_slice*num_b; %number of images
+    num_analysis=9; % slice number used for analysis    
     for(i=1:num_b)
         I(:,:,i)=D(:,:,num_analysis,i);
     end   
     clear D nii;
     I= rot90(I);
-    b_val=[10,20,30,40,50,80,100,150,200,400,600,800,1000,0];
+%     b_val=[10,20,30,40,50,80,100,150,200,400,600,800,1000,0];
 %     b_val=[10,20,30,40,50,80,120,150,200,400,700,800,1000,0];
+    b_val=[400 600 1000];
 end
 %% this section denoise the image;
 % h = fspecial('gaussian',[3,3],0.2);
 % for(i=1:14)
 %     I(:,:,i)=imfilter(I(:,:,i),h);
 % end
-% I=I(40:244,45:212,:);
 h_handle=figure
 imagesc(I(:,:,1));
 title(strcat('Original Pic/',metadata.PatientName.FamilyName))
@@ -93,15 +96,42 @@ title(strcat('Original Pic/',metadata.PatientName.FamilyName))
 if(ROI_create)
     BW = roipoly(I(:,:,1));
     ROI_file=strcat('BW_',metadata.PatientName.FamilyName);
-    save(ROI_file,'BW');
-    
+    save(ROI_file,'BW');    
 %     BW1 = edge(I(:,:,1),'sobel'); % edge detection
 else
     BW=load(strcat('BW_',metadata.PatientName.FamilyName));
     BW=BW.BW;
 end
 
-
+%% this section choose the b value used for computation
+if(flag_use_part_b)
+    used_index=zeros(size(b_value_list));
+    b_value_list=sort(b_value_list,'ascend');
+    num_blist=length(b_value_list);
+    for(i=1:num_blist)
+        temp=find(abs(b_val-b_value_list(i))<0.5);
+        if(isempty(temp))
+            error('Wrong number!');
+        else
+            used_index(i)=temp;
+        end
+    end
+    b_val=[b_value_list,b_val(end)];
+    temp=zeros(metadata.Height,metadata.Width,num_blist+1);
+    temp(:,:,1:num_blist)=I(:,:,used_index);
+    temp(:,:,end)=I(:,:,end);
+    I=temp;
+    clear temp;
+    num_b=length(b_val);
+    
+    num_start=1; % the 9th b number
+    num_end=num_blist; % the 13th b number
+else
+    num_start=9; % the 9th b number
+    num_end=13; % the 13th b number
+end
+n_length=num_end-num_start+1;
+b_val_nonzero=b_val(1:end-1);
 
 
 I=double(I);
@@ -111,17 +141,6 @@ D_matrix=zeros(m_row,n_col);
 D_star_matrix=zeros(m_row,n_col);
 Error_D_matrix=zeros(m_row,n_col);
 Error_model_matrix=zeros(m_row,n_col);
-
-
-
-
-
-num_start=9; % the 9th b number 
-num_end=13; % the 13th b number
-n_length=num_end-num_start+1;
-b_val_nonzero=b_val(1:end-1);
-
-
 
 for(i=1:m_row)
     for(j=1:n_col)
